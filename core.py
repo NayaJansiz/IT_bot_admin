@@ -38,6 +38,15 @@ class GH:
             data = rr.content
         return data, j["sha"]
 
+    def whoami(self):
+        r = self.s.get(f"{API}/user", timeout=30)
+        return r.status_code, (r.json().get("login") if r.ok else r.text[:100])
+
+    def repo_info(self, repo):
+        r = self.s.get(f"{API}/repos/{repo}", timeout=30)
+        if r.status_code != 200: return r.status_code, None
+        j = r.json(); return 200, dict(private=j.get("private"), push=(j.get("permissions") or {}).get("push"))
+
     def put(self, repo, path, data, message, sha=None, branch=None):
         body = {"message": message, "content": base64.b64encode(data).decode()}
         if sha: body["sha"] = sha
@@ -209,7 +218,7 @@ def get_slide(store, subject_id, sid, n):
 
 
 # ---------- patch validation ----------
-CIT_RE = re.compile(r'^\s*§?([A-Za-z][A-Za-z0-9_-]*?)\.(\d+)\s*[:|]\s*(.+)$', re.S)
+CIT_RE = re.compile(r'^\s*§?([^\W\d_][\w-]*?)\.(\d+)\s*[:|]\s*(.+)$', re.S)
 
 def check_citation(cit, subject_id, store):
     m = CIT_RE.match(cit or '')
@@ -414,3 +423,28 @@ def execute_file_update(gh, store, cfg, act):
     store.kv_set('last_' + ('script' if act['target'].endswith('.py') else 'db') + '_backup', bpath)
     store.log('file', f"{act['target']} {act['label']}")
     return bpath
+
+
+def health(gh, cfg):
+    out = []
+    try:
+        code, who = gh.whoami()
+        out.append("GitHub token: " + (f"OK as {who}" if code == 200 else f"FAILED ({code}) - wrong or expired"))
+    except Exception as e: out.append(f"GitHub token: error {e}")
+    for label, repo in (("live repo", cfg["live_repo"]), ("data repo", cfg["data_repo"])):
+        try:
+            code, info = gh.repo_info(repo)
+            if code == 200:
+                out.append(f"{label} {repo}: found, push={'yes' if info['push'] else 'NO'}, {'private' if info['private'] else 'PUBLIC'}")
+            else: out.append(f"{label} {repo}: NOT FOUND or no access ({code}) - check the name")
+        except Exception as e: out.append(f"{label}: error {e}")
+    try:
+        d, _ = gh.get(cfg["live_repo"], "bot.db", cfg["branch"])
+        out.append(f"bot.db on {cfg['branch']}: " + ("found" if d else "MISSING"))
+    except Exception as e: out.append(f"bot.db read: error {e}")
+    try:
+        _, sha = gh.get(cfg["data_repo"], "health.txt")
+        gh.put(cfg["data_repo"], "health.txt", f"ok {time.time()}".encode(), "health check", sha=sha)
+        out.append("data repo write: OK")
+    except Exception as e: out.append(f"data repo write: FAILED {str(e)[:150]}")
+    return out

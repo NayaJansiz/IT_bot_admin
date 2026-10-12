@@ -47,7 +47,15 @@ def sync_save():
         except core.Conflict:
             _, SYNC["sha"] = gh.get(CFG["data_repo"], "admin.db")
 
-async def save_job(ctx): await tt(sync_save)
+async def save_job(ctx):
+    try: await tt(sync_save); ctx.bot_data.pop("save_err", None)
+    except Exception as e:
+        log.error("autosave failed: %s", e)
+        if not ctx.bot_data.get("save_err"):
+            ctx.bot_data["save_err"] = True
+            for i in ADMIN_IDS:
+                try: await ctx.bot.send_message(i, f"⚠️ Autosave to the data repo failed: {str(e)[:200]}\nRun /health")
+                except Exception: pass
 
 def dirty(ctx):
     jq = ctx.application.job_queue
@@ -80,7 +88,7 @@ async def start(update, ctx):
     await update.message.reply_text(
         "Admin bot ready.\n/subject choose subject\nForward polls → saved hidden\nSend lecture PDF (caption: L5 [ocr])\n"
         "/lectures  /drop L5\n/bundle [n] [L5 L6] → file for Claude\nSend patch.json → import\n/review  /publish  /undo\n"
-        "Send bot.py → update script, /rollback_script\n/stats")
+        "Send bot.py → update script, /rollback_script\n/stats  /health")
 
 @admin_only
 async def subject_cmd(update, ctx):
@@ -262,7 +270,8 @@ async def propose(m, ctx, act):
 async def publish_cmd(update, ctx):
     m = update.message
     if ACT_LOCK.locked(): await m.reply_text("Another action is running."); return
-    await flush_save()
+    try: await flush_save()
+    except Exception as e: await m.reply_text(f"⚠️ Could not save admin.db to the data repo ({str(e)[:150]}). Run /health. Continuing with publish.")
     try: act = await tt(core.prepare_publish, gh, store, CFG)
     except Exception as e: await m.reply_text(f"Prepare failed: {e}"); return
     if not act: await m.reply_text("Nothing approved yet. /review first."); return
@@ -340,6 +349,19 @@ async def on_cb(update, ctx):
     elif d == "ac:no": ctx.bot_data.pop("act", None); await q.edit_message_text("Cancelled.")
 
 
+# ---------- errors must never be silent ----------
+async def on_error(update, ctx):
+    log.error("handler error", exc_info=ctx.error)
+    try:
+        if update is not None and getattr(update, "effective_message", None):
+            await update.effective_message.reply_text(f"⚠️ Error: {type(ctx.error).__name__}: {str(ctx.error)[:300]}\nTry /health")
+    except Exception: pass
+
+@admin_only
+async def health_cmd(update, ctx):
+    await update.message.reply_text("\n".join(await tt(core.health, gh, CFG)))
+
+
 # ---------- web server (Render needs an open port) ----------
 class H(BaseHTTPRequestHandler):
     def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
@@ -354,12 +376,13 @@ def main():
     app = Application.builder().token(os.environ["BOT_TOKEN"]).post_init(post_init).build()
     for n, f in [("start", start), ("subject", subject_cmd), ("stats", stats_cmd), ("lectures", lectures_cmd), ("drop", drop_cmd),
                  ("bundle", bundle_cmd), ("review", review_cmd), ("publish", publish_cmd), ("undo", undo_cmd),
-                 ("rollback_script", rollback_script_cmd)]:
+                 ("rollback_script", rollback_script_cmd), ("health", health_cmd)]:
         app.add_handler(CommandHandler(n, f))
     app.add_handler(MessageHandler(filters.POLL, on_poll))
     app.add_handler(MessageHandler(filters.Document.ALL, on_doc))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_cb))
+    app.add_error_handler(on_error)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
