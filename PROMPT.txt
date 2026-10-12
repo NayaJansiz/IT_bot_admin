@@ -1,0 +1,12 @@
+TASK: solve the hidden exam MCQs in QUESTIONS using SOURCES (lecture/exam text) as the main evidence.
+OUTPUT: ONE downloadable file named patch.json containing a JSON list, one object per question, nothing else:
+{"key":"<same key>","correct_index":<0-based int or null>,"explanation":"...","source":"...","confidence":"...","citation":"...","note":"optional"}
+RULES
+1. source = "lecture-text" | "exam-bank" | "inferred-from-concept" | "TODO". Evidence order: SOURCES text, then general knowledge.
+2. For lecture-text/exam-bank: citation = "<ID>.<n>: <exact quote of 4-15 words copied from that slide/page>", e.g. "L5.12: ...". Quote must be verbatim. Never invent a citation or ID.
+3. If SOURCES do not cover it: source "inferred-from-concept", citation "not found in lectures".
+4. Broken question, or missing figure/code/context: correct_index null, source "TODO", say why in note.
+5. Solve each question twice independently. Run code/calculations when needed.
+6. explanation: simple Arabic, keep English terms, MAX 200 characters, say why the right option is right and why a tempting one is wrong. Refer to a lecture only as (م5).
+7. confidence: high | medium | low. "hint(unverified)" values (poll/live) are not evidence: use them only if SOURCES confirm; if you disagree, say so in note.
+8. Do not alter keys or options. Reply with the file only.
